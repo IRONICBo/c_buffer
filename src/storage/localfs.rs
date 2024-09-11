@@ -10,7 +10,6 @@ use std::ffi::OsStr;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// LocalFS 实现了 VirtualFs trait
 #[derive(Debug)]
 pub struct LocalFS {
     root: PathBuf,
@@ -19,7 +18,6 @@ pub struct LocalFS {
 }
 
 impl LocalFS {
-    /// 创建一个新的 LocalFS 实例，使用给定的 root 目录初始化文件系统
     pub fn new(root: &str) -> DatenLordResult<Self> {
         let root_path = PathBuf::from(root);
         let backend = Arc::new(tmp_fs_backend()?);
