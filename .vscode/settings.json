@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "*.yml": "dockercompose",
+        "datenlord.h": "c"
+    }
+}
