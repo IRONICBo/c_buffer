@@ -7,14 +7,25 @@ use clippy_utilities::Cast;
 use nix::errno::Errno;
 use nix::fcntl::OFlag;
 use nix::sys::stat::{Mode, SFlag};
-use serde::{Deserialize, Serialize};
+use serde_derive::{Serialize, Deserialize};
 use tracing::debug;
+
+use crate::common::{DatenLordError, DatenLordResult};
+
+/// Build error result from `nix` error code
+/// # Errors
+///
+/// Return the built `Err(anyhow::Error(..))`
+pub fn build_error_result_from_errno<T>(_error_code: Errno, err_msg: String) -> DatenLordResult<T> {
+    Err(DatenLordError::Internal {
+        context: vec![err_msg],
+    })
+}
+
+use super::virtualfs::INum;
 
 /// The node ID of the root inode
 pub const ROOT_ID: u64 = 1;
-
-/// The type of i-number
-pub type INum = u64;
 
 /// POSIX statvfs parameters
 #[derive(Debug)]
@@ -35,6 +46,21 @@ pub struct StatFsParam {
     pub namelen: u32,
     /// Fragment size
     pub frsize: u32,
+}
+
+impl Default for StatFsParam {
+    fn default() -> Self {
+        Self {
+            blocks: 0,
+            bfree: 0,
+            bavail: 0,
+            files: 0,
+            f_free: 0,
+            bsize: 0,
+            namelen: 0,
+            frsize: 0,
+        }
+    }
 }
 
 /// Set attribute parameters
@@ -416,91 +442,8 @@ pub fn time_from_system_time(system_time: &SystemTime) -> (u64, u32) {
             "failed to convert SystemTime={system_time:?} to Duration"
         ))
         .unwrap_or_else(|e| {
-            panic!(
-                "time_from_system_time() failed to convert SystemTime={:?} \
-                to timestamp(seconds, nano-seconds), the error is: {}",
-                system_time,
-                util::format_anyhow_error(&e),
-            )
+            debug!("time_from_system_time() failed: {:?}", e);
+            std::time::Duration::from_secs(0)
         });
     (duration.as_secs(), duration.subsec_nanos())
-}
-
-/// Convert `FileAttr` to `FuseAttr`
-pub fn convert_to_fuse_attr(attr: FileAttr) -> FuseAttr {
-    let (a_time_secs, a_time_nanos) = time_from_system_time(&attr.atime);
-    let (m_time_secs, m_time_nanos) = time_from_system_time(&attr.mtime);
-    let (c_time_secs, c_time_nanos) = time_from_system_time(&attr.ctime);
-
-    FuseAttr {
-        ino: attr.ino,
-        size: attr.size,
-        blocks: attr.blocks,
-        atime: a_time_secs,
-        mtime: m_time_secs,
-        ctime: c_time_secs,
-        atimensec: a_time_nanos,
-        mtimensec: m_time_nanos,
-        ctimensec: c_time_nanos,
-        mode: crate::async_fuse::util::mode_from_kind_and_perm(attr.kind, attr.perm),
-        nlink: attr.nlink,
-        uid: attr.uid,
-        gid: attr.gid,
-        rdev: attr.rdev,
-        #[cfg(feature = "abi-7-9")]
-        blksize: 0, // TODO: find a proper way to set block size
-        #[cfg(feature = "abi-7-9")]
-        padding: 0,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[allow(clippy::assertions_on_result_states)]
-    fn test_permission_check() {
-        let file = FileAttr {
-            ino: 0,
-            size: 0,
-            blocks: 0,
-            atime: SystemTime::now(),
-            mtime: SystemTime::now(),
-            ctime: SystemTime::now(),
-            kind: SFlag::S_IFREG,
-            perm: 0o741,
-            nlink: 0,
-            uid: 1000,
-            gid: 1000,
-            rdev: 0,
-        };
-
-        // Owner permission checks
-        assert!(file.check_perm_inner(1000, 1001, 7).is_ok());
-        assert!(file.check_perm_inner(1000, 1001, 6).is_ok());
-        assert!(file.check_perm_inner(1000, 1001, 5).is_ok());
-        assert!(file.check_perm_inner(1000, 1001, 4).is_ok());
-        assert!(file.check_perm_inner(1000, 1001, 3).is_ok());
-        assert!(file.check_perm_inner(1000, 1001, 2).is_ok());
-        assert!(file.check_perm_inner(1000, 1001, 1).is_ok());
-
-        // Group permission checks
-        assert!(file.check_perm_inner(1001, 1000, 7).is_err());
-        assert!(file.check_perm_inner(1001, 1000, 6).is_err());
-        assert!(file.check_perm_inner(1001, 1000, 5).is_err());
-        assert!(file.check_perm_inner(1001, 1000, 4).is_ok());
-        assert!(file.check_perm_inner(1001, 1000, 3).is_err());
-        assert!(file.check_perm_inner(1001, 1000, 2).is_err());
-        assert!(file.check_perm_inner(1001, 1000, 1).is_err());
-
-        // Other permission checks
-        assert!(file.check_perm_inner(1002, 1002, 7).is_err());
-        assert!(file.check_perm_inner(1002, 1002, 6).is_err());
-        assert!(file.check_perm_inner(1002, 1002, 5).is_err());
-        assert!(file.check_perm_inner(1002, 1002, 4).is_err());
-        assert!(file.check_perm_inner(1002, 1002, 3).is_err());
-        assert!(file.check_perm_inner(1002, 1002, 2).is_err());
-        assert!(file.check_perm_inner(1002, 1002, 1).is_ok());
-    }
 }

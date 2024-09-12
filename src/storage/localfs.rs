@@ -1,59 +1,86 @@
 use async_trait::async_trait;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-use tokio::sync::Mutex;
-use crate::{DatenLordError, DatenLordResult, FileAttr, INum, CreateParam, SetAttrParam, RenameParam, DirEntry, StatFsParam, FileLockParam};
 use bytes::BytesMut;
-use std::os::unix::fs::PermissionsExt;
-use std::ffi::OsStr;
-use std::collections::HashMap;
-use std::sync::Arc;
+use opendal::services::Fs;
+use opendal::Operator;
+use std::fs;
+use std::os::unix::fs::MetadataExt;
+use std::time::{Duration, SystemTime};
+use std::path::Path;
 
+use crate::common::DatenLordResult;
+use super::fs_util::{CreateParam, FileAttr, RenameParam, SetAttrParam, StatFsParam};
+use super::virtualfs::{DirEntry, INum, VirtualFs};
 #[derive(Debug)]
 pub struct LocalFS {
-    root: PathBuf,
-    backend: Arc<BackendImpl>,
-    open_files: Arc<Mutex<HashMap<u64, u64>>>, // 存储打开的文件句柄 (inode -> file handle)
+    operator: Operator,
 }
 
 impl LocalFS {
-    pub fn new(root: &str) -> DatenLordResult<Self> {
-        let root_path = PathBuf::from(root);
-        let backend = Arc::new(tmp_fs_backend()?);
-
-        Ok(Self {
-            root: root_path,
-            backend,
-            open_files: Arc::new(Mutex::new(HashMap::new())),
-        })
+    pub fn new() -> DatenLordResult<Self> {
+        let mut builder = Fs::default();
+        builder.root("/tmp");
+        let op = Operator::new(builder).unwrap().finish();
+        Ok(Self { operator: op })
     }
 
-    /// 将 inode 转换为本地文件系统的路径
-    fn inode_to_path(&self, ino: u64) -> PathBuf {
-        self.root.join(ino.to_string())
+    fn fileattr_from_metadata(metadata: opendal::Metadata, ino: u64) -> FileAttr {
+        let kind = if metadata.is_file() {
+            nix::sys::stat::SFlag::S_IFREG
+        } else if metadata.is_dir() {
+            nix::sys::stat::SFlag::S_IFDIR
+        } else {
+            nix::sys::stat::SFlag::S_IFLNK
+        };
+        let size = metadata.content_length();
+        let atime = metadata.last_modified().unwrap_or(SystemTime::now().into()).into();
+        let mtime = metadata.last_modified().unwrap_or(SystemTime::now().into()).into();
+
+        FileAttr {
+            ino: ino as INum,
+            size,
+            blocks: size / 512,
+            atime,
+            mtime,
+            ctime: mtime,
+            kind,
+            perm: 0o775,
+            nlink: 1,
+            uid: 1000,
+            gid: 1000,
+            rdev: 0,
+        }
+    }
+
+    fn fileattr_from_local_metadata(metadata: fs::Metadata, ino: u64) -> FileAttr {
+        let kind = if metadata.is_file() {
+            nix::sys::stat::SFlag::S_IFREG
+        } else if metadata.is_dir() {
+            nix::sys::stat::SFlag::S_IFDIR
+        } else {
+            nix::sys::stat::SFlag::S_IFLNK
+        };
+        let size = metadata.len();
+        let atime = metadata.modified().unwrap_or(SystemTime::now().into()).into();
+
+        return FileAttr {
+            ino: ino as INum,
+            size,
+            blocks: size / 512,
+            atime,
+            mtime: atime,
+            ctime: atime,
+            kind,
+            perm: 0o775,
+            nlink: 1,
+            uid: 1000,
+            gid: 1000,
+            rdev: 0,
+        };
     }
 }
 
 #[async_trait]
 impl VirtualFs for LocalFS {
-    /// 初始化文件系统
-    async fn init(&self) -> DatenLordResult<()> {
-        // 检查根目录是否存在
-        if !self.root.exists() {
-            fs::create_dir_all(&self.root)?;
-        }
-        Ok(())
-    }
-
-    /// 销毁文件系统
-    async fn destroy(&self) -> DatenLordResult<()> {
-        // 删除根目录及其所有内容
-        fs::remove_dir_all(&self.root)?;
-        Ok(())
-    }
-
-    /// Lookup：通过名称查找目录项并获取其属性
     async fn lookup(
         &self,
         _uid: u32,
@@ -61,22 +88,17 @@ impl VirtualFs for LocalFS {
         _parent: INum,
         name: &str,
     ) -> DatenLordResult<(Duration, FileAttr, u64)> {
-        let path = self.root.join(name);
-        let metadata = fs::metadata(&path)?;
-        let attr = FileAttr::from(metadata); // 假设我们有 FileAttr::from 这样的函数
-        let ino = metadata.ino();
-        Ok((Duration::from_secs(1), attr, ino))
+        let path = format!("/tmp/{}", name);
+        let local_metadata = fs::metadata(path).unwrap();
+        let ino = local_metadata.ino();
+        let metadata = Self::fileattr_from_local_metadata(local_metadata, ino);
+        Ok((Duration::from_secs(1), metadata, 0))
     }
 
-    /// 获取文件属性
     async fn getattr(&self, ino: u64) -> DatenLordResult<(Duration, FileAttr)> {
-        let path = self.inode_to_path(ino);
-        let metadata = fs::metadata(&path)?;
-        let attr = FileAttr::from(metadata);
-        Ok((Duration::from_secs(1), attr))
+        Ok((Duration::from_secs(1), FileAttr::default()))
     }
 
-    /// 设置文件属性
     async fn setattr(
         &self,
         _uid: u32,
@@ -84,34 +106,15 @@ impl VirtualFs for LocalFS {
         ino: u64,
         param: SetAttrParam,
     ) -> DatenLordResult<(Duration, FileAttr)> {
-        let path = self.inode_to_path(ino);
-        let mut metadata = fs::metadata(&path)?;
-
-        if let Some(mode) = param.mode {
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(mode);
-            fs::set_permissions(&path, permissions)?;
-        }
-
-        if let Some(size) = param.size {
-            fs::File::create(&path)?.set_len(size)?;
-        }
-
-        let attr = FileAttr::from(metadata);
-        Ok((Duration::from_secs(1), attr))
+        Ok((Duration::from_secs(1), FileAttr::default()))
     }
 
     async fn readlink(&self, ino: u64) -> DatenLordResult<Vec<u8>> {
-        let path = self.inode_to_path(ino);
-        let target = fs::read_link(&path)?;
-        Ok(target.as_os_str().as_bytes().to_vec())
+        Ok(Vec::new())
     }
 
     async fn open(&self, _uid: u32, _gid: u32, ino: u64, _flags: u32) -> DatenLordResult<u64> {
-        let mut open_files = self.open_files.lock().await;
-        let fh = ino;
-        open_files.insert(ino, fh);
-        Ok(fh)
+        Ok(0)
     }
 
     async fn read(
@@ -120,12 +123,12 @@ impl VirtualFs for LocalFS {
         fh: u64,
         offset: u64,
         size: u32,
-        buf: &mut BytesMut,
+        buf: &mut [u8],
     ) -> DatenLordResult<usize> {
-        // 使用 backend 读取文件数据
-        let result = self.backend.read(ino, fh, offset, size as usize).await?;
-        buf.extend_from_slice(&result);
-        Ok(result.len())
+        // fill buf with size bytes from data
+        let data = vec![0; size as usize];
+        buf.copy_from_slice(&data);
+        Ok(data.len())
     }
 
     async fn write(
@@ -136,28 +139,36 @@ impl VirtualFs for LocalFS {
         data: &[u8],
         _flags: u32,
     ) -> DatenLordResult<()> {
-        self.backend.write(ino, fh, offset as u64, data).await?;
         Ok(())
     }
 
     async fn unlink(&self, _uid: u32, _gid: u32, _parent: INum, name: &str) -> DatenLordResult<()> {
-        let path = self.root.join(name);
-        fs::remove_file(&path)?;
         Ok(())
     }
 
     async fn mkdir(&self, param: CreateParam) -> DatenLordResult<(Duration, FileAttr, u64)> {
-        let path = self.root.join(&param.name);
-        fs::create_dir(&path)?;
-        let metadata = fs::metadata(&path)?;
-        let attr = FileAttr::from(metadata);
-        Ok((Duration::from_secs(1), attr, metadata.ino()))
+        let path = format!("/tmp/{}", param.name);
+        self.operator.create_dir(&path).await.unwrap();
+
+        let attr = FileAttr {
+            ino: param.parent,
+            size: 0,
+            blocks: 0,
+            atime: SystemTime::now(),
+            mtime: SystemTime::now(),
+            ctime: SystemTime::now(),
+            kind: param.node_type,
+            perm: param.mode as u16,
+            nlink: 2,
+            uid: param.uid,
+            gid: param.gid,
+            rdev: 0,
+        };
+
+        Ok((Duration::from_secs(1), attr, param.parent))
     }
 
     async fn rename(&self, _uid: u32, _gid: u32, param: RenameParam) -> DatenLordResult<()> {
-        let old_path = self.root.join(&param.oldname);
-        let new_path = self.root.join(&param.newname);
-        fs::rename(old_path, new_path)?;
         Ok(())
     }
 
@@ -169,15 +180,73 @@ impl VirtualFs for LocalFS {
         _lock_owner: u64,
         _flush: bool,
     ) -> DatenLordResult<()> {
-        let mut open_files = self.open_files.lock().await;
-        open_files.remove(&ino);
         Ok(())
     }
 
     async fn statfs(&self, _uid: u32, _gid: u32, ino: u64) -> DatenLordResult<StatFsParam> {
-        let path = self.inode_to_path(ino);
-        let stat = fs::metadata(&path)?;
-        let param = StatFsParam::from(stat);
-        Ok(param)
+        Ok(StatFsParam::default())
+    }
+
+    async fn fsync(&self, _ino: u64, _fh: u64, _datasync: bool) -> DatenLordResult<()> {
+        Ok(())
+    }
+
+    async fn flush(&self, _ino: u64, _fh: u64, _lock_owner: u64) -> DatenLordResult<()> {
+        Ok(())
+    }
+
+    async fn symlink(
+        &self,
+        _uid: u32,
+        _gid: u32,
+        _parent: INum,
+        _name: &str,
+        _target_path: &Path,
+    ) -> DatenLordResult<(Duration, FileAttr, u64)> {
+        Ok((Duration::from_secs(1), FileAttr::default(), 0))
+    }
+
+    async fn readdir(
+        &self,
+        uid: u32,
+        gid: u32,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+    ) -> DatenLordResult<Vec<DirEntry>> {
+        Ok(Vec::new())
+    }
+
+    async fn rmdir(
+        &self,
+        uid: u32,
+        gid: u32,
+        parent: INum,
+        dir_name: &str,
+    ) -> DatenLordResult<Option<INum>> {
+        Ok(None)
+    }
+
+    async fn link(&self, _newparent: u64, _newname: &str) -> DatenLordResult<()> {
+        Ok(())
+    }
+
+    async fn forget(&self, _ino: u64, _nlookup: u64) {
+    }
+
+    async fn mknod(&self, _param: CreateParam) -> DatenLordResult<(Duration, FileAttr, u64)> {
+        Ok((Duration::from_secs(1), FileAttr::default(), 0))
+    }
+
+    async fn opendir(&self, _uid: u32, _gid: u32, ino: u64, _flags: u32) -> DatenLordResult<u64> {
+        Ok(0)
+    }
+
+    async fn releasedir(&self, _ino: u64, _fh: u64, _flags: u32) -> DatenLordResult<()> {
+        Ok(())
+    }
+
+    async fn fsyncdir(&self, _ino: u64, _fh: u64, _datasync: bool) -> DatenLordResult<()> {
+        Ok(())
     }
 }

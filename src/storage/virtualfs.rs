@@ -1,9 +1,9 @@
 //! The `FileSystem` trait
-use std::{fs::FileType, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use serde::{Deserialize, Serialize};
+use serde_derive::{Serialize, Deserialize};
 use tracing::warn;
 
 use crate::common::{DatenLordError, DatenLordResult};
@@ -20,8 +20,6 @@ pub struct DirEntry {
     ino: INum,
     /// The name of the child
     name: String,
-    /// The type of the child
-    file_type: FileType,
 }
 
 /// Virtual filesystem trait
@@ -127,7 +125,7 @@ pub trait VirtualFs: Sync + Send {
         offset: u64,
         size: u32,
         // Use buffer trait instead of Vec<u8> to avoid memory copy
-        buf: &mut BytesMut,
+        buf: &mut [u8],
     ) -> DatenLordResult<usize>;
 
     /// Write data

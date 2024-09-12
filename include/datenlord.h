@@ -13,6 +13,15 @@ constexpr static const uint64_t ROOT_ID = 1;
 /// TODO: add a feature flag to control this
 constexpr static const bool NEED_CHECK_PERM = false;
 
+template<typename T = void>
+struct Arc;
+
+struct LocalFS;
+
+struct datenlord_sdk {
+  Arc<Mutex<LocalFS>> localfs;
+};
+
 struct datenlord_bytes {
   const uint8_t *data;
   uintptr_t len;
@@ -25,26 +34,31 @@ struct datenlord_error {
 
 extern "C" {
 
-datenlord_error *init(const char *config);
+datenlord_sdk *init(const char *config);
 
-bool exists(const char *dir_path);
+void free_sdk(datenlord_sdk *sdk);
 
-datenlord_error *mkdir(const char *dir_path);
+bool exists(datenlord_sdk *sdk, const char *dir_path);
 
-datenlord_error *delete(const char *dir_path, bool recursive);
+datenlord_error *mkdir(datenlord_sdk *sdk, const char *dir_path);
 
-datenlord_error *rename(const char *src_path, const char *dest_path);
+datenlord_error *delete_dir(datenlord_sdk *sdk, const char *dir_path, bool recursive);
 
-datenlord_error *copy_from_local_file(bool overwrite,
+datenlord_error *rename_path(datenlord_sdk *sdk, const char *src_path, const char *dest_path);
+
+datenlord_error *copy_from_local_file(datenlord_sdk *sdk,
+                                      bool overwrite,
                                       const char *local_file_path,
                                       const char *dest_file_path);
 
-datenlord_error *copy_to_local_file(const char *src_file_path, const char *local_file_path);
+datenlord_error *copy_to_local_file(datenlord_sdk *sdk,
+                                    const char *src_file_path,
+                                    const char *local_file_path);
 
-datenlord_error *stat(const char *file_path);
+datenlord_error *stat(datenlord_sdk *sdk, const char *file_path);
 
-datenlord_error *write_file(const char *file_path, datenlord_bytes content);
+datenlord_error *write_file(datenlord_sdk *sdk, const char *file_path, datenlord_bytes content);
 
-datenlord_error *read_file(const char *file_path, datenlord_bytes *out_content);
+datenlord_error *read_file(datenlord_sdk *sdk, const char *file_path, datenlord_bytes *out_content);
 
 } // extern "C"
