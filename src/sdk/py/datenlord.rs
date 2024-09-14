@@ -1,70 +1,83 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString};
 use pyo3::wrap_pyfunction;
-use tokio::runtime::Runtime;
 use std::sync::{Arc, Mutex};
+use tokio::runtime::Runtime;
 use bytes::BytesMut;
-use crate::storage::fs_util::{CreateParam, RenameParam};
+use std::fs;
 use crate::storage::localfs::LocalFS;
-use crate::storage::virtualfs::VirtualFs;
+use crate::storage::fs_util::{CreateParam, RenameParam};
+use crate::storage::virtualfs::{INum, VirtualFs};
+use nix::sys::stat::SFlag;
 
 #[pyclass]
-struct DatenlordSdk {
-    localfs: Arc<Mutex<LocalFS>>, // 保存 `LocalFS` 实例
+struct DatenlordSDK {
+    localfs: Arc<Mutex<LocalFS>>,
 }
 
 #[pymethods]
-impl DatenlordSdk {
+impl DatenlordSDK {
     #[new]
-    fn new(config: &str) -> PyResult<Self> {
+    fn new() -> PyResult<Self> {
         let localfs = LocalFS::new().unwrap();
-        Ok(Self {
+        Ok(DatenlordSDK {
             localfs: Arc::new(Mutex::new(localfs)),
         })
     }
 
-    fn mkdir(&self, dir_path: &str) -> PyResult<()> {
+    fn exists(&self, dir_path: &str) -> PyResult<bool> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
+        let result = rt.block_on(async {
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.lookup(1000, 1000, 1, dir_path).await
+        });
+        Ok(result.is_ok())
+    }
+
+    fn mkdir(&self, dir_path: &str) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
+        let rt = Runtime::new().unwrap();
+        let result = rt.block_on(async {
             let param = CreateParam {
-                parent: 1,
+                parent: 34735213, // 示例 inode
                 name: dir_path.to_string(),
-                mode: 0o755,
+                mode: 0o777,
                 rdev: 0,
                 uid: 1000,
                 gid: 1000,
-                node_type: nix::sys::stat::SFlag::S_IFDIR,
+                node_type: SFlag::S_IFDIR,
                 link: None,
             };
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.mkdir(param).await
+        });
 
-            let mut localfs = self.localfs.lock().unwrap();
-            localfs.mkdir(param).await.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to create directory"))
-        })
+        if result.is_ok() {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyOSError::new_err("Failed to create directory"))
+        }
     }
 
-    fn exists(&self, dir_path: &str) -> PyResult<bool> {
+    fn deldir(&self, dir_path: &str, recursive: bool) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut localfs = self.localfs.lock().unwrap();
-            localfs.lookup(1000, 1000, 1, dir_path).await.map(|_| true).or(Ok(false))
-        })
-    }
+        let result = rt.block_on(async {
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.rmdir(1000, 1000, 1, dir_path).await // 示例 inode
+        });
 
-    fn delete_dir(&self, dir_path: &str, recursive: bool) -> PyResult<()> {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut localfs = self.localfs.lock().unwrap();
-            if recursive {
-                localfs.rmdir(1000, 1000, 1, dir_path).await
-            } else {
-                localfs.unlink(1000, 1000, 1, dir_path).await
-            }.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to remove directory"))
-        })
+        if result.is_ok() {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyOSError::new_err("Failed to remove directory"))
+        }
     }
 
     fn rename_path(&self, src_path: &str, dest_path: &str) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
+        let result = rt.block_on(async {
             let param = RenameParam {
                 old_parent: 1,
                 old_name: src_path.to_string(),
@@ -72,71 +85,147 @@ impl DatenlordSdk {
                 new_name: dest_path.to_string(),
                 flags: 0,
             };
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.rename(1000, 1000, param).await
+        });
 
-            let mut localfs = self.localfs.lock().unwrap();
-            localfs.rename(1000, 1000, param).await.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to rename path"))
-        })
+        if result.is_ok() {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyOSError::new_err("Failed to rename path"))
+        }
     }
 
-    fn copy_from_local_file(&self, overwrite: bool, local_file_path: &str, dest_file_path: &str) -> PyResult<()> {
+    fn copy_from_local_file(&self, local_file_path: &str, dest_file_path: &str, overwrite: bool) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut localfs = self.localfs.lock().unwrap();
-
+        let result = rt.block_on(async {
+            let localfs = sdk_ref.lock().unwrap();
             if !overwrite && localfs.lookup(1000, 1000, 1, dest_file_path).await.is_ok() {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err("Destination file exists"));
+                return Err(());
             }
 
-            match std::fs::read(local_file_path) {
-                Ok(content) => {
-                    localfs.write(1, 0, 0, &content, 0).await.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to copy file"))
-                }
-                Err(_) => Err(pyo3::exceptions::PyRuntimeError::new_err("Failed to read local file")),
+            match fs::read(local_file_path) {
+                Ok(content) => localfs.write(1, 0, 0, &content, 0).await.map_err(|_| ()),
+                Err(_) => Err(()),
             }
-        })
+        });
+
+        if result.is_ok() {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyOSError::new_err("Failed to copy file"))
+        }
     }
 
     fn copy_to_local_file(&self, src_file_path: &str, local_file_path: &str) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
+        let result = rt.block_on(async {
             let mut buf = BytesMut::new();
-            let mut localfs = self.localfs.lock().unwrap();
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.read(1, 0, 0, 1024, &mut buf).await.map_err(|_| ()) // 示例 inode 和最大读取字节数
+        });
 
-            localfs.read(1, 0, 0, 1024, &mut buf).await.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to read remote file"))?;
-
-            std::fs::write(local_file_path, &buf).map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to write local file"))
-        })
+        match result {
+            Ok(size) => {
+                Ok(())
+            }
+            Err(_) => Err(pyo3::exceptions::PyOSError::new_err("Failed to copy file to local")),
+        }
     }
 
-    fn read_file<'py>(&self, py: Python<'py>, file_path: &str) -> PyResult<&'py PyBytes> {
+    fn create_file(&self, file_path: &str) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut buf = BytesMut::new();
-            let mut localfs = self.localfs.lock().unwrap();
+        let result = rt.block_on(async {
+            let param = CreateParam {
+                parent: 1,
+                name: file_path.to_string(),
+                mode: 0o644,
+                rdev: 0,
+                uid: 1000,
+                gid: 1000,
+                node_type: SFlag::S_IFREG,
+                link: None,
+            };
 
-            localfs.read(1, 0, 0, 1024, &mut buf).await.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to read file"))?;
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.mknod(param).await
+        });
 
-            Ok(PyBytes::new(py, &buf))
-        })
+        if result.is_ok() {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyOSError::new_err("Failed to create file"))
+        }
     }
 
-    fn write_file(&self, file_path: &str, content: &[u8]) -> PyResult<()> {
+    fn stat(&self, file_path: &str) -> PyResult<(u64, u32, u32, u32, u32)> {
+        let sdk_ref = &self.localfs;
         let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut localfs = self.localfs.lock().unwrap();
-            localfs.write(1, 0, 0, content, 0).await.map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Failed to write file"))
-        })
+        let result = rt.block_on(async {
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.getattr(1).await // 示例 inode
+        });
+
+        match result {
+            Ok(attr) => {
+                let file_stat = (
+                    attr.1.size,  // 文件大小
+                    attr.1.uid,   // 用户ID
+                    attr.1.gid,   // 组ID
+                    attr.1.nlink, // 硬链接数量
+                    attr.1.rdev,  // 设备ID
+                );
+                Ok(file_stat)
+            }
+            Err(_) => Err(pyo3::exceptions::PyOSError::new_err("Failed to get file metadata")),
+        }
+    }
+
+    fn write_file(&self, file_path: &str, content: Vec<u8>) -> PyResult<()> {
+        let sdk_ref = &self.localfs;
+        let rt = Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.write(34734588, 0, 0, &content, 0).await // 示例 inode
+        });
+
+        if result.is_ok() {
+            Ok(())
+        } else {
+            Err(pyo3::exceptions::PyOSError::new_err("Failed to write file"))
+        }
+    }
+
+    fn read_file(&self, file_path: &str) -> PyResult<Vec<u8>> {
+        let sdk_ref = &self.localfs;
+        let rt = Runtime::new().unwrap();
+        let mut buf = BytesMut::new();
+        let result = rt.block_on(async {
+            buf.reserve(1024);
+            let localfs = sdk_ref.lock().unwrap();
+            localfs.read(1, 0, 0, 1024, &mut buf).await.map_err(|_| ()) // 示例 inode
+        });
+
+        match result {
+            Ok(size) =>  {
+                Ok(Vec::from(&buf[..size]))
+            }
+            Err(_) => Err(pyo3::exceptions::PyOSError::new_err("Failed to read file")),
+        }
     }
 }
 
 #[pyfunction]
-fn init_sdk(config: &str) -> PyResult<DatenlordSdk> {
-    DatenlordSdk::new(config)
+fn init_sdk() -> PyResult<DatenlordSDK> {
+    DatenlordSDK::new()
 }
 
 #[pymodule]
 fn datenlord(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<DatenlordSdk>()?;
+    m.add_class::<DatenlordSDK>()?;
     m.add_function(wrap_pyfunction!(init_sdk, m)?)?;
     Ok(())
 }

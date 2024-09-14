@@ -1,5 +1,5 @@
 [package]
-name = "c_buffer"
+name = "datenlord"
 version = "0.1.0"
 edition = "2021"
 
@@ -29,3 +29,6 @@ serde_derive = "1.0"
 thiserror = "1.0.22"
 opendal = {version = "0.43.0", features = ["layers-prometheus"]}
 pyo3 = { version = "0.16", features = ["extension-module"] }
+
+[package.metadata.maturin]
+bindings = "pyo3"

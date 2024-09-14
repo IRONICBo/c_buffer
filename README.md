@@ -33,3 +33,12 @@ Run python demo.
 ```bash
 LD_LIBRARY_PATH=$LD_LIBRARY_PATH:../../../target/release PYTHONPATH=.:$PYTHONPATH python3 test_datenlord_sdk.py
 ```
+
+##### pyo3
+
+Add pyo3 to `Cargo.toml` to install pyo3, and export functions with `maturin`
+
+```bash
+python3 -m pip install maturin
+```
+
