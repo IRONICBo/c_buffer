@@ -22,6 +22,9 @@ PYBIND11_MODULE(datenlord, m) {
     m.attr("ROOT_ID") = ROOT_ID;
     m.attr("NEED_CHECK_PERM") = NEED_CHECK_PERM;
 
+    py::class_<datenlord_sdk>(m, "DatenlordSDK")
+        .def(py::init<>());
+
     m.def("init", [](const std::string &config) -> datenlord_sdk* {
         datenlord_sdk *sdk = datenlord::init(config.c_str());
         return sdk;

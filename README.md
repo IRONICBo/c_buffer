@@ -26,7 +26,7 @@ python3 -m pip install pybind11
 
 Build python library with pybind11.
 ```bash
- g++ -O3 -Wall -shared -std=c++11 -fPIC $(python3 -m pybind11 --includes) bindings.cpp -o datenlord$(python3-config --extension-suffix) -L../../../target/release -ldatenlord -ldl
+g++ -O3 -Wall -shared -std=c++11 -fPIC $(python3 -m pybind11 --includes) bindings.cpp -o datenlord$(python3-config --extension-suffix) -L../../../target/release -ldatenlord -ldl
 ```
 
 Run python demo.

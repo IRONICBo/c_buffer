@@ -19,7 +19,7 @@ def main():
     print(f"Directory exists: {dir_exists}")
 
     # Mkdir /example_dir
-    err = datenlord.mkdir(sdk, "/example_dir/")
+    err = datenlord.mkdir(sdk, "example_dir/")
     if err is None:
         print("Directory created successfully")
     else:
