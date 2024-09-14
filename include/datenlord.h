@@ -32,6 +32,29 @@ struct datenlord_error {
   datenlord_bytes message;
 };
 
+/// The type of i-number
+using INum = uint64_t;
+
+/// File attributes
+struct datenlord_file_stat {
+  /// Inode number
+  INum ino;
+  /// Size in bytes
+  uint64_t size;
+  /// Size in blocks
+  uint64_t blocks;
+  /// Permissions
+  uint16_t perm;
+  /// Number of hard links
+  uint32_t nlink;
+  /// User id
+  uint32_t uid;
+  /// Group id
+  uint32_t gid;
+  /// Rdev
+  uint32_t rdev;
+};
+
 extern "C" {
 
 datenlord_sdk *init(const char *config);
@@ -42,7 +65,7 @@ bool exists(datenlord_sdk *sdk, const char *dir_path);
 
 datenlord_error *mkdir(datenlord_sdk *sdk, const char *dir_path);
 
-datenlord_error *delete_dir(datenlord_sdk *sdk, const char *dir_path, bool recursive);
+datenlord_error *deldir(datenlord_sdk *sdk, const char *dir_path, bool recursive);
 
 datenlord_error *rename_path(datenlord_sdk *sdk, const char *src_path, const char *dest_path);
 
@@ -55,7 +78,11 @@ datenlord_error *copy_to_local_file(datenlord_sdk *sdk,
                                     const char *src_file_path,
                                     const char *local_file_path);
 
-datenlord_error *stat(datenlord_sdk *sdk, const char *file_path);
+datenlord_error *create_file(datenlord_sdk *sdk, const char *file_path);
+
+datenlord_error *stat(datenlord_sdk *sdk,
+                      const char *file_path,
+                      datenlord_file_stat *file_metadata);
 
 datenlord_error *write_file(datenlord_sdk *sdk, const char *file_path, datenlord_bytes content);
 

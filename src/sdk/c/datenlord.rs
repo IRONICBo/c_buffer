@@ -1,19 +1,42 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_uint};
 use std::ptr;
+use std::time::SystemTime;
 use bytes::BytesMut;
 use tokio::runtime::Runtime;
 use std::sync::{Arc, Mutex};
 
 use crate::storage::fs_util::{CreateParam, RenameParam};
 use crate::storage::localfs::LocalFS;
-use crate::storage::virtualfs::VirtualFs;
+use crate::storage::virtualfs::{INum, VirtualFs};
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
 pub struct datenlord_error {
     pub code: c_uint,
     pub message: datenlord_bytes,
+}
+
+/// File attributes
+#[repr(C)]
+#[allow(non_camel_case_types)]
+pub struct datenlord_file_stat {
+    /// Inode number
+    pub ino: INum,
+    /// Size in bytes
+    pub size: u64,
+    /// Size in blocks
+    pub blocks: u64,
+    /// Permissions
+    pub perm: u16,
+    /// Number of hard links
+    pub nlink: u32,
+    /// User id
+    pub uid: u32,
+    /// Group id
+    pub gid: u32,
+    /// Rdev
+    pub rdev: u32,
 }
 
 #[repr(C)]
@@ -40,7 +63,8 @@ impl datenlord_error {
 #[repr(C)]
 #[allow(non_camel_case_types)]
 pub struct datenlord_sdk {
-    localfs: Arc<Mutex<LocalFS>>, // 保存 `LocalFS` 实例
+    // Do not expose the internal structure
+    localfs: Arc<Mutex<LocalFS>>,
 }
 
 #[no_mangle]
@@ -67,7 +91,7 @@ pub extern "C" fn init(config: *const c_char) -> *mut datenlord_sdk {
 pub extern "C" fn free_sdk(sdk: *mut datenlord_sdk) {
     if !sdk.is_null() {
         unsafe {
-            Box::from_raw(sdk);
+            let _ = Box::from_raw(sdk);
         }
     }
 }
@@ -84,7 +108,7 @@ pub extern "C" fn exists(sdk: *mut datenlord_sdk, dir_path: *const c_char) -> bo
 
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async {
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
         // demo inode info
         localfs.lookup(1000, 1000, 1, path).await
     });
@@ -98,6 +122,8 @@ pub extern "C" fn mkdir(sdk: *mut datenlord_sdk, dir_path: *const c_char) -> *mu
         return datenlord_error::new(1, "Invalid arguments".to_string());
     }
 
+    println!("mkdir path {:?}", dir_path);
+
     let path = unsafe { CStr::from_ptr(dir_path).to_str().unwrap_or_default() };
 
     let sdk_ref = unsafe { &*sdk };
@@ -105,9 +131,9 @@ pub extern "C" fn mkdir(sdk: *mut datenlord_sdk, dir_path: *const c_char) -> *mu
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async {
         let param = CreateParam {
-            parent: 1,// test inode
+            parent: 34735213,// test inode
             name: path.to_string(),
-            mode: 0o755,
+            mode: 0o777,
             rdev: 0,
             uid: 1000,
             gid: 1000,
@@ -115,7 +141,7 @@ pub extern "C" fn mkdir(sdk: *mut datenlord_sdk, dir_path: *const c_char) -> *mu
             link: None,
         };
 
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
         localfs.mkdir(param).await
     });
 
@@ -123,10 +149,11 @@ pub extern "C" fn mkdir(sdk: *mut datenlord_sdk, dir_path: *const c_char) -> *mu
         Ok(_) => std::ptr::null_mut(),
         Err(_) => datenlord_error::new(1, "Failed to create directory".to_string()),
     }
+
 }
 
 #[no_mangle]
-pub extern "C" fn delete_dir(
+pub extern "C" fn deldir(
     sdk: *mut datenlord_sdk,
     dir_path: *const c_char,
     recursive: bool
@@ -141,7 +168,7 @@ pub extern "C" fn delete_dir(
     let rt = Runtime::new().unwrap();
     // dimiss recursive now
     let result = rt.block_on(async {
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
         localfs.rmdir(1000, 1000, 1, path).await
     });
 
@@ -174,7 +201,7 @@ pub extern "C" fn rename_path(
             new_name: dest.to_string(),
             flags: 0,
         };
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
         localfs.rename(1000, 1000, param).await
     });
 
@@ -201,7 +228,7 @@ pub extern "C" fn copy_from_local_file(
 
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async {
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
 
         if !overwrite && localfs.lookup(1000, 1000, 1, dest).await.is_ok() {
             return Err(());
@@ -241,7 +268,7 @@ pub extern "C" fn copy_to_local_file(
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async {
         let mut buf = BytesMut::new();
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
 
         // for demo purpose, we need to get the hole file size
         match localfs.read(1, 0, 0, 1024, &mut buf).await {
@@ -263,7 +290,7 @@ pub extern "C" fn copy_to_local_file(
 
 
 #[no_mangle]
-pub extern "C" fn stat(
+pub extern "C" fn create_file(
     sdk: *mut datenlord_sdk,
     file_path: *const c_char
 ) -> *mut datenlord_error {
@@ -276,13 +303,60 @@ pub extern "C" fn stat(
 
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async {
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let param = CreateParam {
+            parent: 1,
+            name: path.to_string(),
+            mode: 0o644,
+            rdev: 0,
+            uid: 1000,
+            gid: 1000,
+            node_type: nix::sys::stat::SFlag::S_IFREG,
+            link: None,
+        };
+
+        let localfs = sdk_ref.localfs.lock().unwrap();
+        localfs.mknod(param).await
+    });
+
+    match result {
+        Ok(_) => std::ptr::null_mut(),
+        Err(_) => datenlord_error::new(1, "Failed to create file".to_string()),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn stat(
+    sdk: *mut datenlord_sdk,
+    file_path: *const c_char,
+    file_metadata: *mut datenlord_file_stat
+) -> *mut datenlord_error {
+    if sdk.is_null() || file_path.is_null() {
+        return datenlord_error::new(1, "Invalid arguments".to_string());
+    }
+    if file_metadata.is_null() {
+        return datenlord_error::new(1, "Invalid arguments".to_string());
+    }
+
+    let path = unsafe { CStr::from_ptr(file_path).to_str().unwrap_or_default() };
+    let sdk_ref = unsafe { &*sdk };
+    let file_metadata: &mut datenlord_file_stat = unsafe { &mut *file_metadata };
+
+    let rt = Runtime::new().unwrap();
+    let result = rt.block_on(async {
+        let localfs = sdk_ref.localfs.lock().unwrap();
         localfs.getattr(1).await  // 示例 inode
     });
 
     match result {
         Ok(attr) => {
             println!("File duration: {:?}, attr: {:?}", attr.0, attr.1);
+            // Convert to file metadata
+            file_metadata.size = attr.1.size;
+            file_metadata.uid = attr.1.uid;
+            file_metadata.gid = attr.1.gid;
+            file_metadata.nlink = attr.1.nlink;
+            file_metadata.rdev = attr.1.rdev;
+
             std::ptr::null_mut()
         }
         Err(_) => datenlord_error::new(1, "Failed to get file metadata".to_string()),
@@ -302,13 +376,15 @@ pub extern "C" fn write_file(
     let path = unsafe { CStr::from_ptr(file_path).to_str().unwrap_or_default() };
     let data = unsafe { std::slice::from_raw_parts(content.data, content.len) };
 
+    println!("Writing file: {} data size: {} data {}", path, data.len(), String::from_utf8_lossy(data));
+
     let sdk_ref = unsafe { &*sdk };
 
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async {
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
         // demo params
-        localfs.write(1, 0, 0, data, 0).await
+        localfs.write(34734588, 0, 0, data, 0).await
     });
 
     match result {
@@ -334,14 +410,14 @@ pub extern "C" fn read_file(
     let rt = Runtime::new().unwrap();
     // TODO, use outside buffer
     let result = rt.block_on(async {
-        let mut localfs = sdk_ref.localfs.lock().unwrap();
+        let localfs = sdk_ref.localfs.lock().unwrap();
 
         // Convert buffer to c buffer
         let out_content_data = unsafe { (*out_content).data as *mut u8 };
         let out_content_len = unsafe { (*out_content).len };
         let buffer: &mut [u8] = unsafe { std::slice::from_raw_parts_mut(out_content_data, out_content_len) };
 
-        localfs.read(1, 0, 0, buffer.len() as u32, buffer).await
+        localfs.read(34734588, 0, 0, buffer.len() as u32, buffer).await
     });
 
     match result {

@@ -148,7 +148,7 @@ impl VirtualFs for LocalFS {
 
     async fn mkdir(&self, param: CreateParam) -> DatenLordResult<(Duration, FileAttr, u64)> {
         let path = format!("/tmp/{}", param.name);
-        self.operator.create_dir(&path).await.unwrap();
+        // self.operator.create_dir(&path).await.unwrap();
 
         let attr = FileAttr {
             ino: param.parent,

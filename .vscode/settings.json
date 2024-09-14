@@ -2,5 +2,6 @@
     "files.associations": {
         "*.yml": "dockercompose",
         "datenlord.h": "c"
-    }
+    },
+    "makefile.configureOnOpen": true
 }

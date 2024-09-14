@@ -1,80 +1,98 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
-#include <stdint.h>
 #include "datenlord.h"
 
-void print_error(datenlord_error *err) {
-    if (err) {
-        printf("Error code: %d, message: %.*s\n", err->code, (int)err->message.len, err->message.data);
-    } else {
-        printf("No errors occurred.\n");
-    }
-}
 
-void demo_init_and_dir_check() {
-    const char *config = "{ \"log_level\": \"info\", \"connection\": \"localhost\" }";
-    datenlord_error *err = init(config);
-    print_error(err);
-
-    if (err) {
-        free(err);
-        return;
-    }
-
-    const char *dir_path = "/tmp/datenlord_test";
-    bool exists_result = exists(dir_path);
-    printf("Directory %s exists? %s\n", dir_path, exists_result ? "Yes" : "No");
-
-    if (!exists_result) {
-        err = mkdir(dir_path);
-        print_error(err);
-        if (err) free(err);
-    }
-}
-
-void demo_write_and_read_file() {
-    const char *file_path = "/tmp/datenlord_test/hello.txt";
-    const char *content = "Hello, Datenlord!";
-
-    datenlord_bytes write_bytes;
-    write_bytes.data = (const uint8_t *)content;
-    write_bytes.len = strlen(content);
-
-    datenlord_error *err = write_file(file_path, write_bytes);
-    print_error(err);
-    if (err) {
-        free(err);
-        return;
-    }
-
-    datenlord_bytes read_bytes;
-    err = read_file(file_path, &read_bytes);
-    print_error(err);
-
-    if (!err) {
-        printf("Read file content: %.*s\n", (int)read_bytes.len, read_bytes.data);
-    } else {
+// Utils functions to free current error
+void handle_error(datenlord_error *err) {
+    if (err != NULL) {
+        printf("Error code: %d, message: %.*s\n", err->code, (int)err->message.len, (const char*)err->message.data);
         free(err);
     }
-}
-
-void demo_delete_directory() {
-    const char *dir_path = "/tmp/datenlord_test";
-
-    datenlord_error *err = delete_dir(dir_path, true);
-    print_error(err);
-
-    if (err) free(err);
 }
 
 int main() {
-    demo_init_and_dir_check();
+    // Init sdk
+    datenlord_sdk* sdk = init("example_config");
+    if (sdk == NULL) {
+        printf("Failed to initialize SDK\n");
+        return 1;
+    }
+    printf("SDK initialized successfully\n");
 
-    demo_write_and_read_file();
+    // Check current dir is available
+    bool dir_exists = exists(sdk, "/datenlord_sdk");
+    printf("Directory exists: %d\n", dir_exists);
 
-    demo_delete_directory();
+    // Mkdir /example_dir
+    datenlord_error* err = mkdir(sdk, "example_dir/");
+    if (err == NULL) {
+        printf("Directory created successfully\n");
+    } else {
+        handle_error(err);
+    }
+
+    // Create file
+    err = create_file(sdk, "/example_dir/example_file.txt");
+    if (err == NULL) {
+        printf("File created successfully\n");
+    } else {
+        handle_error(err);
+    }
+
+    // Write file
+    const char* file_path = "/example_dir/example_file.txt";
+    const char* file_content = "Hello, Datenlord!";
+    datenlord_bytes content = { (const uint8_t*)file_content, strlen(file_content) };
+    err = write_file(sdk, file_path, content);
+    if (err == NULL) {
+        printf("File written successfully\n");
+    } else {
+        handle_error(err);
+    }
+
+    // Read file
+    size_t buffer_size = 1024;
+    uint8_t *buffer = (uint8_t *)malloc(buffer_size);
+    if (buffer == NULL) {
+        printf("Failed to allocate buffer\n");
+        return 1;
+    }
+    datenlord_bytes out_content = { buffer, buffer_size };
+    err = read_file(sdk, file_path, &out_content);
+    if (err == NULL) {
+        printf("File read successfully: %.*s\n", (int)out_content.len, (const char*)out_content.data);
+    } else {
+        handle_error(err);
+    }
+
+    // Stat file
+    datenlord_file_stat file_stat;
+    err = stat(sdk, "/example_dir/renamed_file.txt", &file_stat);
+    if (err == NULL) {
+        printf("File stat: %ld %d %d %d %d %d %d %d %d %d %d\n", file_stat.blocks, file_stat.gid, file_stat.ino, file_stat.nlink, file_stat.perm, file_stat.rdev, file_stat.size, file_stat.uid);
+    }
+
+    // Rename file
+    err = rename_path(sdk, "/example_dir/example_file.txt", "/example_dir/renamed_file.txt");
+    if (err == NULL) {
+        printf("File renamed successfully\n");
+    } else {
+        handle_error(err);
+    }
+
+    // Delete dir
+    err = deldir(sdk, "/example_dir", 1);
+    if (err == NULL) {
+        printf("Directory deleted successfully\n");
+    } else {
+        handle_error(err);
+    }
+
+    // Release sdk
+    free_sdk(sdk);
+    printf("SDK released successfully\n");
 
     return 0;
 }

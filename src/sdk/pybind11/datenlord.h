@@ -13,7 +13,10 @@ constexpr static const uint64_t ROOT_ID = 1;
 /// TODO: add a feature flag to control this
 constexpr static const bool NEED_CHECK_PERM = false;
 
-struct datenlord_sdk;
+
+struct LocalFS;
+
+struct datenlord_sdk {};
 
 struct datenlord_bytes {
   const uint8_t *data;
@@ -47,6 +50,8 @@ struct datenlord_file_stat {
   /// Rdev
   uint32_t rdev;
 };
+
+namespace datenlord {
 
 extern "C" {
 
@@ -82,3 +87,5 @@ datenlord_error *write_file(datenlord_sdk *sdk, const char *file_path, datenlord
 datenlord_error *read_file(datenlord_sdk *sdk, const char *file_path, datenlord_bytes *out_content);
 
 } // extern "C"
+
+}
